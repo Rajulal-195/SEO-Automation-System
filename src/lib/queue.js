@@ -31,6 +31,12 @@ function getAuditQueue() {
   return globalForQueue.__auditQueue;
 }
 
+/** The Redis connection behind the queue (created on first use). Used by lock.js. */
+function getQueueConnection() {
+  getAuditQueue();
+  return globalForQueue.__auditQueueConnection;
+}
+
 /**
  * Lets routes use `auditQueue.add(...)` exactly as written in the assessment,
  * while the real Queue is only created when a method is first called.
@@ -60,4 +66,4 @@ async function closeAuditQueue() {
   if (connection) await connection.quit();
 }
 
-module.exports = { auditQueue, getAuditQueue, closeAuditQueue, QUEUE_NAME, JOB_NAME };
+module.exports = { auditQueue, getAuditQueue, getQueueConnection, closeAuditQueue, QUEUE_NAME, JOB_NAME };
