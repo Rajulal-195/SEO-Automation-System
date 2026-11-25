@@ -19,7 +19,6 @@ export async function GET(_req, { params }) {
       overallScore: true,
       scoreBreakdown: true,
       result: true,
-      pdfPath: true,
       errorMessage: true,
       createdAt: true,
       completedAt: true,
@@ -29,7 +28,8 @@ export async function GET(_req, { params }) {
 
   if (!audit) return NextResponse.json({ error: 'Audit not found' }, { status: 404 });
 
-  // The raw server path stays private; the UI only needs to know a PDF exists
-  const { pdfPath, ...rest } = audit;
-  return NextResponse.json({ ...rest, hasPdf: Boolean(pdfPath) }, { headers: { 'Cache-Control': 'no-store' } });
+  // The report is rendered on demand from the saved result, so it is downloadable
+  // as soon as the audit is complete. The server-side file path is never exposed.
+  const hasPdf = audit.status === 'COMPLETED' && audit.result !== null;
+  return NextResponse.json({ ...audit, hasPdf }, { headers: { 'Cache-Control': 'no-store' } });
 }

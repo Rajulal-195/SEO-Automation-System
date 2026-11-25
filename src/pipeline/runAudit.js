@@ -1,7 +1,7 @@
 // src/pipeline/runAudit.js
 // The audit pipeline (PDF section 3.2) for ONE audit:
 //   collect signals (steps 1-7) -> Claude analysis -> save to Postgres.
-// PDF generation and notifications are added in Chunks 10 and 11.
+//   -> PDF report. Notifications are added in Chunk 11.
 //
 // Used by the BullMQ worker (worker/index.js) and, later, by the cron route.
 // The database and the two big steps can be injected, which keeps this
@@ -10,6 +10,7 @@
 const { UnrecoverableError } = require('bullmq');
 const { collectSignals } = require('../crawlers/collect');
 const { analyzeSignals } = require('../ai/analyze');
+const { generateReportFile } = require('../report/pdf');
 
 // Progress (0-100) shown in the admin portal
 const PROGRESS = {
@@ -19,6 +20,8 @@ const PROGRESS = {
   signalsDone: 55,
   claudeStart: 60,
   saving: 80,
+  pdfStart: 85,
+  pdfDone: 92,
   completed: 100,
 };
 
@@ -43,6 +46,7 @@ async function runAudit(auditId, deps = {}) {
   const db = getDb(deps);
   const collect = deps.collect || collectSignals;
   const analyze = deps.analyze || analyzeSignals;
+  const generateReport = deps.generateReport || generateReportFile;
 
   const audit = await db.audit.findUnique({ where: { id: auditId }, include: { client: true } });
   if (!audit) {
@@ -84,24 +88,55 @@ async function runAudit(auditId, deps = {}) {
   const { result, meta } = await analyze(audit.client, signals);
 
   // Save to Postgres
+  const savedSignals = toJson({ ...signals, analysisMeta: meta });
   await update({
     progress: PROGRESS.saving,
     currentStep: 'Saving audit results',
     overallScore: result.overall_score,
     scoreBreakdown: toJson(result.score_breakdown),
-    signals: toJson({ ...signals, analysisMeta: meta }),
+    signals: savedSignals,
     result: toJson(result),
+  });
+
+  // PDF report. A failure here must not throw away a finished audit: the web app can
+  // still render the same report on demand, so it is recorded and the audit completes.
+  await update({ progress: PROGRESS.pdfStart, currentStep: 'Generating PDF report' });
+  const completedAt = new Date();
+  let pdfPath = null;
+  let pdfError = null;
+  try {
+    pdfPath = await generateReport({
+      client: audit.client,
+      audit: {
+        id: auditId,
+        overallScore: result.overall_score,
+        scoreBreakdown: result.score_breakdown,
+        result,
+        signals: savedSignals,
+        createdAt: audit.createdAt,
+        completedAt,
+      },
+    });
+  } catch (err) {
+    pdfError = String(err.message || err).slice(0, 500);
+    console.error(`[audit ${auditId}] PDF generation failed: ${pdfError}`);
+  }
+  await update({
+    progress: PROGRESS.pdfDone,
+    currentStep: pdfPath ? 'PDF report generated' : 'PDF report failed',
+    pdfPath,
+    errorMessage: pdfError ? `PDF generation failed: ${pdfError}` : null,
   });
 
   await update({
     status: 'COMPLETED',
     progress: PROGRESS.completed,
     currentStep: 'Completed',
-    completedAt: new Date(),
+    completedAt,
   });
 
   console.log(`[audit ${auditId}] completed in ${Date.now() - started}ms, score ${result.overall_score}`);
-  return { skipped: false, score: result.overall_score };
+  return { skipped: false, score: result.overall_score, pdfPath };
 }
 
 /**
