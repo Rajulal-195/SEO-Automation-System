@@ -1,7 +1,7 @@
 // src/pipeline/runAudit.js
 // The audit pipeline (PDF section 3.2) for ONE audit:
 //   collect signals (steps 1-7) -> Claude analysis -> save to Postgres.
-//   -> PDF report. Notifications are added in Chunk 11.
+//   -> PDF report -> WhatsApp + email notifications.
 //
 // Used by the BullMQ worker (worker/index.js) and, later, by the cron route.
 // The database and the two big steps can be injected, which keeps this
@@ -11,6 +11,7 @@ const { UnrecoverableError } = require('bullmq');
 const { collectSignals } = require('../crawlers/collect');
 const { analyzeSignals } = require('../ai/analyze');
 const { generateReportFile } = require('../report/pdf');
+const { sendReportNotifications } = require('../notify');
 
 // Progress (0-100) shown in the admin portal
 const PROGRESS = {
@@ -22,6 +23,7 @@ const PROGRESS = {
   saving: 80,
   pdfStart: 85,
   pdfDone: 92,
+  notify: 95,
   completed: 100,
 };
 
@@ -47,6 +49,7 @@ async function runAudit(auditId, deps = {}) {
   const collect = deps.collect || collectSignals;
   const analyze = deps.analyze || analyzeSignals;
   const generateReport = deps.generateReport || generateReportFile;
+  const notify = deps.notify || sendReportNotifications;
 
   const audit = await db.audit.findUnique({ where: { id: auditId }, include: { client: true } });
   if (!audit) {
@@ -127,6 +130,19 @@ async function runAudit(auditId, deps = {}) {
     pdfPath,
     errorMessage: pdfError ? `PDF generation failed: ${pdfError}` : null,
   });
+
+  // Deliver the report. Never fatal: failures are recorded as Notification rows.
+  await update({ progress: PROGRESS.notify, currentStep: 'Sending notifications' });
+  try {
+    await notify({
+      db,
+      client: audit.client,
+      audit: { id: auditId, overallScore: result.overall_score, result },
+      pdfPath,
+    });
+  } catch (err) {
+    console.error(`[audit ${auditId}] notifications failed: ${err.message}`);
+  }
 
   await update({
     status: 'COMPLETED',

@@ -23,6 +23,10 @@ export async function GET(_req, { params }) {
       createdAt: true,
       completedAt: true,
       client: { select: { id: true, name: true, websiteUrl: true } },
+      notifications: {
+        select: { id: true, channel: true, status: true, providerId: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      },
     },
   });
 

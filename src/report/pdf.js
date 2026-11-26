@@ -14,6 +14,8 @@ const os = require('os');
 const path = require('path');
 const PDFKit = require('pdfkit');
 
+const { scoreGrade } = require('./score');
+
 const PDFDocument = PDFKit.default || PDFKit;
 
 // ---------- layout constants (A4, points) ----------
@@ -90,13 +92,6 @@ function scoreColor(score) {
   if (score >= 70) return COLORS.good;
   if (score >= 50) return COLORS.warn;
   return COLORS.bad;
-}
-
-function scoreGrade(score) {
-  if (score >= 85) return 'Excellent';
-  if (score >= 70) return 'Good';
-  if (score >= 50) return 'Needs improvement';
-  return 'Poor';
 }
 
 function formatDate(value) {
