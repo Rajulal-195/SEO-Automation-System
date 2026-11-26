@@ -1,12 +1,18 @@
 // src/app/api/audit/[id]/route.js
 // GET /api/audit/:id  ->  status, progress, currentStep, overallScore, result
-// Polled by the admin portal while an audit runs, so it only reads one row.
+// Polled by both portals while an audit runs, so it only reads one row.
+// Admins get everything; a client gets only the report of its own audits.
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { getRequestSession, canAccessClient } from '@/lib/auth';
+import { shapeAudit } from '@/lib/auditShape';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req, { params }) {
+export async function GET(req, { params }) {
+  const session = getRequestSession(req);
+  if (!session) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
+
   const audit = await prisma.audit.findUnique({
     where: { id: params.id },
     select: {
@@ -30,10 +36,10 @@ export async function GET(_req, { params }) {
     },
   });
 
-  if (!audit) return NextResponse.json({ error: 'Audit not found' }, { status: 404 });
+  // A client asking for someone else's audit gets "not found", not "forbidden"
+  if (!audit || !canAccessClient(session, audit.clientId)) {
+    return NextResponse.json({ error: 'Audit not found' }, { status: 404 });
+  }
 
-  // The report is rendered on demand from the saved result, so it is downloadable
-  // as soon as the audit is complete. The server-side file path is never exposed.
-  const hasPdf = audit.status === 'COMPLETED' && audit.result !== null;
-  return NextResponse.json({ ...audit, hasPdf }, { headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json(shapeAudit(audit, session.role), { headers: { 'Cache-Control': 'no-store' } });
 }

@@ -1,11 +1,12 @@
 // src/app/api/audit/route.js
-// POST /api/audit  { clientId }  ->  202 { auditId }
+// POST /api/audit  { clientId }  ->  202 { auditId }          (admin only)
 // Only enqueues. The worker does the heavy work, so this stays well under 10 s.
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auditQueue } from '@/lib/queue';
 import { withTimeout } from '@/lib/withTimeout';
 import { acquireLock, releaseLock } from '@/lib/lock';
+import { getRequestSession } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,10 @@ const QUEUE_TIMEOUT_MS = 5000;
 const LOCK_TTL_SECONDS = 30;
 
 export async function POST(req) {
+  const session = getRequestSession(req);
+  if (!session) return NextResponse.json({ error: 'Not signed in' }, { status: 401 });
+  if (session.role !== 'admin') return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+
   let body;
   try {
     body = await req.json();
